@@ -1,7 +1,5 @@
-package com.lfls.hotfix.bootstrap;
+package com.lfls.hotfix.client;
 
-import com.lfls.hotfix.client.ClientReadHandler;
-import com.lfls.hotfix.client.ClientWriteHandler;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.*;
@@ -15,7 +13,7 @@ import io.netty.channel.socket.nio.NioSocketChannel;
  */
 public class Client {
 
-    public static void main(String[] args) {
+    public void start() throws Exception {
         EventLoopGroup workerGroup = new NioEventLoopGroup();
         try {
             Bootstrap b = new Bootstrap();
@@ -42,8 +40,6 @@ public class Client {
             ChannelFuture f = b.connect("127.0.0.1", 8989).sync();
 
             f.channel().closeFuture().sync();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
         } finally {
             workerGroup.shutdownGracefully();
         }
