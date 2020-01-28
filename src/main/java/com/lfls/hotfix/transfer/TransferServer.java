@@ -8,7 +8,6 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
 import io.netty.channel.epoll.*;
-import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.unix.DomainSocketAddress;
 import io.netty.channel.unix.DomainSocketReadMode;
 import io.netty.channel.unix.FileDescriptor;
@@ -20,6 +19,7 @@ import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * @author lingfenglangshao
@@ -92,11 +92,12 @@ public class TransferServer {
 
                                         //通知old server正在迁移的连接对应的new channel ID
                                         String newChannelId = socketChannel.id().asLongText();
-                                        //TODO 是否需要release?
                                         ByteBuf newChannelIdBuf = Unpooled.copiedBuffer(newChannelId, StandardCharsets.UTF_8);
                                         ByteBuf newIdBuf = ctx.alloc().buffer(4 + newChannelIdBuf.readableBytes());
                                         newIdBuf.writeInt(newChannelIdBuf.readableBytes());
                                         newIdBuf.writeBytes(newChannelIdBuf);
+                                        //TODO 是否需要release?
+                                        newChannelIdBuf.release();
 
                                         ctx.writeAndFlush(newIdBuf).addListener(future -> {
                                             if (future.isSuccess()){
@@ -171,6 +172,8 @@ public class TransferServer {
         return transferChannels.get(channelId);
     }
 
+    private AtomicInteger shutDown = new AtomicInteger(2);
+
     public boolean closeEvent(Object evt, ChannelFuture future){
         if (evt instanceof IdleStateEvent){
             IdleStateEvent event = (IdleStateEvent) evt;
@@ -179,7 +182,13 @@ public class TransferServer {
                     || event.state()== IdleState.ALL_IDLE){
                 //5s没有事件发生，认为连接迁移完毕，关闭server
                 future.channel().close().addListener(f -> {
-                    if (!f.isSuccess()){
+                    if (f.isSuccess()){
+                        if (future == fdChannelFuture || future == dataChannelFuture){
+                            if (shutDown.decrementAndGet() == 0){
+                                Server.getInstance().startHotFixServer();
+                            }
+                        }
+                    }else {
                         f.cause().printStackTrace();
                     }
                 });
