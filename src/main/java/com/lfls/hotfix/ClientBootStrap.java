@@ -1,6 +1,7 @@
 package com.lfls.hotfix;
 
 import com.lfls.hotfix.client.Client;
+import io.netty.util.ResourceLeakDetector;
 
 /**
  * @author lingfenglangshao
@@ -9,6 +10,7 @@ import com.lfls.hotfix.client.Client;
 public class ClientBootStrap {
 
     public static void main(String[] args) {
+        ResourceLeakDetector.setLevel(ResourceLeakDetector.Level.ADVANCED);
         try {
             new Client().start();
         } catch (Exception e) {

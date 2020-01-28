@@ -32,7 +32,7 @@ public class ServerReadHandler extends ByteToMessageDecoder {
             if (in.readableBytes() >= 4 + length){
                 in.skipBytes(4);
                 ByteBuf remain = ctx.alloc().buffer(length);
-                in.readBytes(remain, length);
+                in.readBytes(remain);
                 ctx.channel().write(name + ":" + remain.toString(StandardCharsets.UTF_8));
                 out.add(remain);
             }

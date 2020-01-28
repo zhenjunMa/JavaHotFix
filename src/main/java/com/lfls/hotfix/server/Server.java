@@ -30,7 +30,7 @@ import java.util.concurrent.*;
 public class Server {
 
     //key:old channelId  value:data transfer channel
-    public final Map<String, Channel> channelMap = new HashMap<>();
+    public final Map<String, Channel> channelMap = new ConcurrentHashMap<>();
 
     //key:old channelId  value:new channelId
     private final Map<String, String> channelIdMap = new ConcurrentHashMap<>();
@@ -59,82 +59,84 @@ public class Server {
 
     public void start() throws Exception {
         //先启动主线程
-        try {
-            ServerBootstrap b = new ServerBootstrap();
-            b.group(bossGroup, workerGroup)
-                    .channel(EpollServerSocketChannel.class)
-                    .childHandler(new ChannelInitializer<SocketChannel>() {
-                        @Override
-                        public void initChannel(SocketChannel ch) throws Exception {
-                            ch.pipeline().addLast("decode", new ServerReadHandler("old server"));
-                            ch.pipeline().addLast(new ChannelOutboundHandlerAdapter(){
-                                @Override
-                                public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+//        try {
+//
+//        } finally {
+//            //TODO 不能在这里关闭
+//            workerGroup.shutdownGracefully();
+//            bossGroup.shutdownGracefully();
+//        }
+        ServerBootstrap b = new ServerBootstrap();
+        b.group(bossGroup, workerGroup)
+                .channel(EpollServerSocketChannel.class)
+                .childHandler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    public void initChannel(SocketChannel ch) throws Exception {
+                        ch.pipeline().addLast("decode", new ServerReadHandler("old server"));
+                        ch.pipeline().addLast(new ChannelOutboundHandlerAdapter(){
+                            @Override
+                            public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+                                ByteBuf buf = (ByteBuf) msg;
+                                buf.retain();
+                                ctx.writeAndFlush(buf).addListener(future -> {
+                                    if (future.isSuccess()){
+                                        buf.release();
+                                    }else {
+                                        //热更新中，尝试发送写失败数据给new server
+                                        String oldChannelId = ctx.channel().id().asLongText();
+                                        if (channelIdMap.containsKey(oldChannelId)){
 
-                                    ctx.writeAndFlush(msg).addListener(future -> {
-                                        if (future.cause() != null){
-                                            System.out.println("write fail");
-                                            //热更新中，尝试发送写失败数据给new server
-                                            String oldChannelId = ctx.channel().id().asLongText();
-                                            if (channelIdMap.containsKey(oldChannelId)){
+                                            //1: read/write
+                                            //4: newChannelId length
+                                            //length: newChannelId
+                                            //4: remain data length
+                                            //length : remain data
 
-                                                //1: read/write
-                                                //4: newChannelId length
-                                                //length: newChannelId
-                                                //4: remain data length
-                                                //length : remain data
+                                            String newChannelId = channelIdMap.get(oldChannelId);
+                                            ByteBuf newChannelIdBuf = Unpooled.copiedBuffer(newChannelId, StandardCharsets.UTF_8);
 
-                                                ByteBuf buf = (ByteBuf) msg;
-                                                String newChannelId = channelIdMap.get(oldChannelId);
-                                                ByteBuf newChannelIdBuf = Unpooled.copiedBuffer(newChannelId, StandardCharsets.UTF_8);
+                                            Channel transferChannel = channelMap.get(oldChannelId);
 
-                                                Channel transferChannel = channelMap.get(oldChannelId);
+                                            ByteBuf buffer = transferChannel.alloc().buffer(1 + 4 + newChannelIdBuf.readableBytes() + 4 + buf.readableBytes());
 
-                                                ByteBuf buffer = transferChannel.alloc().buffer(1 + 4 + newChannelIdBuf.readableBytes() + 4 + buf.readableBytes());
+                                            buffer.writeByte(1);
+                                            buffer.writeInt(newChannelIdBuf.readableBytes());
+                                            buffer.writeBytes(newChannelIdBuf);
+                                            buffer.writeInt(buf.readableBytes());
+                                            buffer.writeBytes(buf);
+                                            buf.release();
 
-                                                buffer.writeByte(1);
-                                                buffer.writeInt(newChannelIdBuf.readableBytes());
-                                                buffer.writeBytes(newChannelIdBuf);
-                                                buffer.writeInt(buf.readableBytes());
-                                                buffer.writeBytes(buf);
+                                            transferChannel.writeAndFlush(buffer).addListener(future1 -> {
+                                                if (!future1.isSuccess()){
+                                                    future1.cause().printStackTrace();
+                                                }
+                                            });
 
-                                                transferChannel.writeAndFlush(buffer).addListener(future1 -> {
-                                                    if (future1.isSuccess()){
-                                                        System.out.println("write remain write data success");
-                                                    }else {
-                                                        future1.cause().printStackTrace();
-                                                    }
-                                                });
-
-                                            }
                                         }
-                                    });
-                                }
-                            });
-                            ch.pipeline().addLast(new ServerWriteHandler());
-                        }
-                    })
-                    .option(ChannelOption.SO_BACKLOG, 128)
-                    .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
-                    .option(ChannelOption.SO_REUSEADDR, true)
-                    .childOption(ChannelOption.SO_KEEPALIVE, true)
-                    .childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
-                    .childOption(ChannelOption.TCP_NODELAY, true);
+                                    }
+                                });
+                            }
+                        });
+                        ch.pipeline().addLast(new ServerWriteHandler());
+                    }
+                })
+                .option(ChannelOption.SO_BACKLOG, 128)
+                .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+                .option(EpollChannelOption.SO_REUSEADDR, true)
+                .option(EpollChannelOption.SO_REUSEPORT, true)
+                .childOption(ChannelOption.SO_KEEPALIVE, true)
+                .childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+                .childOption(ChannelOption.TCP_NODELAY, true);
 
 
-            serverChannelFuture = b.bind(8989).sync();
-        } finally {
-            //TODO 不能在这里关闭
-            workerGroup.shutdownGracefully();
-            bossGroup.shutdownGracefully();
-        }
+        serverChannelFuture = b.bind(8989).sync();
 
         if (needHotFix()){
             status = ServerStatus.HOT_FIX;
+        }else {
+            //如果需要热更新，则更新完成以后再启动
+            startHotFixServer();
         }
-
-        //如果需要热更新，则更新完成以后再启动
-        startHotFixServer();
     }
 
     public boolean needHotFix() {
@@ -254,8 +256,6 @@ public class Server {
             });
         }
 
-        System.out.println("fd/read data transfer complete");
-
     }
 
     public void startTransferReadData(Channel channel) {
@@ -267,8 +267,8 @@ public class Server {
                         .handler(new ChannelInitializer<EpollDomainSocketChannel>() {
                             @Override
                             protected void initChannel(EpollDomainSocketChannel ch) throws Exception {
-                                ch.pipeline().addLast(new TransferClientDataHandler(channel));
                                 ch.pipeline().addLast(new IdleStateHandler(5, 5, 5));
+                                ch.pipeline().addLast(new TransferClientDataHandler(channel));
                                 ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
                                     @Override
                                     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
@@ -277,6 +277,11 @@ public class Server {
                                             channelMap.remove(channel.id().asLongText());
                                             channelIdMap.remove(channel.id().asLongText());
                                             channelGroup.remove(channel);
+
+                                            if (channelMap.size() == 0){
+                                                //完成迁移，退出老进程
+                                                System.exit(1);
+                                            }
                                         }else {
                                             super.userEventTriggered(ctx,evt);
                                         }
@@ -308,6 +313,10 @@ public class Server {
 
     public void addTransferDataChannel(String channelId, Channel channel) {
         channelMap.put(channelId, channel);
+    }
+
+    public void changeStatus(){
+        status = ServerStatus.NORMAL;
     }
 
 }

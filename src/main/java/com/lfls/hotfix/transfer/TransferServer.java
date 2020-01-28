@@ -7,10 +7,8 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
-import io.netty.channel.epoll.EpollChannelOption;
-import io.netty.channel.epoll.EpollEventLoopGroup;
-import io.netty.channel.epoll.EpollServerDomainSocketChannel;
-import io.netty.channel.epoll.EpollSocketChannel;
+import io.netty.channel.epoll.*;
+import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.unix.DomainSocketAddress;
 import io.netty.channel.unix.DomainSocketReadMode;
 import io.netty.channel.unix.FileDescriptor;
@@ -20,8 +18,8 @@ import io.netty.handler.timeout.IdleStateHandler;
 
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * @author lingfenglangshao
@@ -36,7 +34,7 @@ public class TransferServer {
     private EventLoopGroup bossGroup = new EpollEventLoopGroup(2);
     private EventLoopGroup workerGroup = new EpollEventLoopGroup();
 
-    private final Map<String, Channel> transferChannels = new HashMap<>();
+    private final Map<String, Channel> transferChannels = new ConcurrentHashMap<>();
 
     private ChannelFuture fdChannelFuture;
     private ChannelFuture dataChannelFuture;
@@ -70,38 +68,45 @@ public class TransferServer {
                                 });
                             }
                         })
-                        .childHandler(new ChannelInboundHandlerAdapter() {
+                        .childHandler(new ChannelInitializer<EpollDomainSocketChannel>() {
 
                             @Override
-                            public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-                                //给收到的FD构建新的Channel
-                                FileDescriptor fd = (FileDescriptor) msg;
-                                EpollSocketChannel socketChannel = new EpollSocketChannel(fd.intValue());
-                                socketChannel.pipeline().addLast("decode", new ServerReadHandler("new server"));
-                                socketChannel.pipeline().addLast(new ChannelOutboundHandlerAdapter(){
+                            protected void initChannel(EpollDomainSocketChannel ch) throws Exception {
+                                ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+
                                     @Override
-                                    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-                                        ctx.writeAndFlush(msg);
+                                    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                                        //给收到的FD构建新的Channel
+                                        FileDescriptor fd = (FileDescriptor) msg;
+                                        EpollSocketChannel socketChannel = new EpollSocketChannel(fd.intValue());
+                                        socketChannel.pipeline().addLast("decode", new ServerReadHandler("new server"));
+                                        socketChannel.pipeline().addLast(new ChannelOutboundHandlerAdapter(){
+                                            @Override
+                                            public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+                                                ctx.writeAndFlush(msg);
+                                            }
+                                        });
+                                        socketChannel.pipeline().addLast(new ServerWriteHandler());
+
+                                        Server.getInstance().addChannel(socketChannel);
+
+                                        //通知old server正在迁移的连接对应的new channel ID
+                                        String newChannelId = socketChannel.id().asLongText();
+                                        //TODO 是否需要release?
+                                        ByteBuf newChannelIdBuf = Unpooled.copiedBuffer(newChannelId, StandardCharsets.UTF_8);
+                                        ByteBuf newIdBuf = ctx.alloc().buffer(4 + newChannelIdBuf.readableBytes());
+                                        newIdBuf.writeInt(newChannelIdBuf.readableBytes());
+                                        newIdBuf.writeBytes(newChannelIdBuf);
+
+                                        ctx.writeAndFlush(newIdBuf).addListener(future -> {
+                                            if (future.isSuccess()){
+                                                transferChannels.put(newChannelId, socketChannel);
+                                            }
+                                        });
                                     }
-                                });
-                                socketChannel.pipeline().addLast(new ServerWriteHandler());
 
-                                Server.getInstance().addChannel(socketChannel);
-
-                                //通知old server正在迁移的连接对应的new channel ID
-                                String newChannelId = socketChannel.id().asLongText();
-                                ByteBuf newChannelIdBuf = Unpooled.copiedBuffer(newChannelId, StandardCharsets.UTF_8);
-                                ByteBuf newIdBuf = ctx.alloc().buffer(4 + newChannelIdBuf.readableBytes());
-                                newIdBuf.writeInt(newChannelIdBuf.readableBytes());
-                                newIdBuf.writeBytes(newChannelIdBuf);
-
-                                ctx.writeAndFlush(newIdBuf).addListener(future -> {
-                                    if (future.isSuccess()){
-                                        transferChannels.put(newChannelId, socketChannel);
-                                    }
                                 });
                             }
-
                         })
                         .childOption(EpollChannelOption.DOMAIN_SOCKET_READ_MODE, DomainSocketReadMode.FILE_DESCRIPTORS);
                 SocketAddress s = new DomainSocketAddress("/tmp/transfer-fd.sock");

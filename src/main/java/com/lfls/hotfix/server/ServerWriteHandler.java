@@ -21,6 +21,8 @@ public class ServerWriteHandler extends MessageToByteEncoder<String> {
         head.writeInt(body.readableBytes());
         out.writeBytes(head);
         out.writeBytes(body);
+        head.release();
+        body.release();
     }
 
 }
