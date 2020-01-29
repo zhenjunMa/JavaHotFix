@@ -57,14 +57,6 @@ public class Server {
     }
 
     public void start() throws Exception {
-        //先启动主线程
-//        try {
-//
-//        } finally {
-//            //TODO 不能在这里关闭
-//            workerGroup.shutdownGracefully();
-//            bossGroup.shutdownGracefully();
-//        }
         ServerBootstrap b = new ServerBootstrap();
         b.group(bossGroup, workerGroup)
                 .channel(EpollServerSocketChannel.class)
@@ -325,6 +317,11 @@ public class Server {
 
     public ServerStatus getServerStatus(){
         return status;
+    }
+
+    public void shutDown(){
+        workerGroup.shutdownGracefully();
+        bossGroup.shutdownGracefully();
     }
 
 }

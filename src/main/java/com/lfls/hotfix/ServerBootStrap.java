@@ -1,6 +1,7 @@
 package com.lfls.hotfix;
 
 import com.lfls.hotfix.server.Server;
+import com.lfls.hotfix.transfer.TransferServer;
 import io.netty.util.ResourceLeakDetector;
 
 /**
@@ -11,6 +12,10 @@ public class ServerBootStrap {
 
     public static void main(String[] args) {
         ResourceLeakDetector.setLevel(ResourceLeakDetector.Level.ADVANCED);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            Server.getInstance().shutDown();
+            TransferServer.getInstance().shutDown();
+        }));
         try {
             Server.getInstance().start();
         }catch (Exception e){

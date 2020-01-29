@@ -15,7 +15,6 @@ import io.netty.channel.unix.FileDescriptor;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.IdleStateHandler;
-import io.netty.util.AttributeKey;
 
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -32,7 +31,6 @@ public class TransferServer {
     //1. 接收被迁移的连接
     //2. 接收连接的存量数据
 
-    //TODO 什么时候关闭group?
     private EventLoopGroup bossGroup = new EpollEventLoopGroup(2);
     private EventLoopGroup workerGroup = new EpollEventLoopGroup();
 
@@ -159,6 +157,7 @@ public class TransferServer {
                                         if (transferChannelCount.incrementAndGet() == transferChannels.size()){
                                             transferChannels.clear();
                                             Server.getInstance().changeStatus(ServerStatus.NORMAL);
+                                            shutDown();
                                         }
                                     }
 
@@ -216,6 +215,11 @@ public class TransferServer {
             return true;
         }
         return false;
+    }
+
+    public void shutDown(){
+        bossGroup.shutdownGracefully();
+        workerGroup.shutdownGracefully();
     }
 
 }
