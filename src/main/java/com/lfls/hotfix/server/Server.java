@@ -81,36 +81,44 @@ public class Server {
                                     if (future.isSuccess()){
                                         buf.release();
                                     }else {
-                                        //热更新中，尝试发送写失败数据给new server
-                                        String oldChannelId = ctx.channel().id().asLongText();
-                                        if (channelIdMap.containsKey(oldChannelId)){
+                                        if (status == ServerStatus.HOT_FIX){
+                                            //热更新中，尝试发送写失败数据给new server
+                                            String oldChannelId = ctx.channel().id().asLongText();
+                                            if (channelIdMap.containsKey(oldChannelId)){
 
-                                            //1: read/write
-                                            //4: newChannelId length
-                                            //length: newChannelId
-                                            //4: remain data length
-                                            //length : remain data
+                                                //1: read/write
+                                                //4: newChannelId length
+                                                //length: newChannelId
+                                                //4: remain data length
+                                                //length : remain data
 
-                                            String newChannelId = channelIdMap.get(oldChannelId);
-                                            ByteBuf newChannelIdBuf = Unpooled.copiedBuffer(newChannelId, StandardCharsets.UTF_8);
+                                                String newChannelId = channelIdMap.get(oldChannelId);
+                                                ByteBuf newChannelIdBuf = Unpooled.copiedBuffer(newChannelId, StandardCharsets.UTF_8);
 
-                                            Channel transferChannel = channelMap.get(oldChannelId);
+                                                Channel transferChannel = channelMap.get(oldChannelId);
 
-                                            ByteBuf buffer = transferChannel.alloc().buffer(1 + 4 + newChannelIdBuf.readableBytes() + 4 + buf.readableBytes());
+                                                ByteBuf buffer = transferChannel.alloc().buffer(1 + 4 + newChannelIdBuf.readableBytes() + 4 + buf.readableBytes());
 
-                                            buffer.writeByte(1);
-                                            buffer.writeInt(newChannelIdBuf.readableBytes());
-                                            buffer.writeBytes(newChannelIdBuf);
-                                            buffer.writeInt(buf.readableBytes());
-                                            buffer.writeBytes(buf);
+                                                buffer.writeByte(1);
+                                                buffer.writeInt(newChannelIdBuf.readableBytes());
+                                                buffer.writeBytes(newChannelIdBuf);
+                                                buffer.writeInt(buf.readableBytes());
+                                                buffer.writeBytes(buf);
+                                                buf.release();
+
+                                                transferChannel.writeAndFlush(buffer).addListener(future1 -> {
+                                                    if (!future1.isSuccess()){
+                                                        future1.cause().printStackTrace();
+                                                    }
+                                                });
+
+                                            }else {
+                                                //处于热更新状态，但找不到用于迁移数据的channel，可能是超时了？
+                                                buf.release();
+                                            }
+                                        }else {
+                                            //单纯写失败
                                             buf.release();
-
-                                            transferChannel.writeAndFlush(buffer).addListener(future1 -> {
-                                                if (!future1.isSuccess()){
-                                                    future1.cause().printStackTrace();
-                                                }
-                                            });
-
                                         }
                                     }
                                 });
@@ -311,8 +319,12 @@ public class Server {
         channelMap.put(channelId, channel);
     }
 
-    public void changeStatus(){
-        status = ServerStatus.NORMAL;
+    public void changeStatus(ServerStatus status){
+        this.status = status;
+    }
+
+    public ServerStatus getServerStatus(){
+        return status;
     }
 
 }

@@ -76,6 +76,7 @@ public class TransferServerDataHandler extends ByteToMessageDecoder {
                     //处理遗留的写数据
                     channel.writeAndFlush(remainData);
                 }else {
+                    //TODO 注册之前收到old server未写出去的数据
 //                    task.offer(remainData);
                 }
             }

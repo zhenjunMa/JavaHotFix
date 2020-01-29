@@ -1,5 +1,6 @@
 package com.lfls.hotfix.transfer;
 
+import com.lfls.hotfix.enums.ServerStatus;
 import com.lfls.hotfix.server.Server;
 import com.lfls.hotfix.server.ServerReadHandler;
 import com.lfls.hotfix.server.ServerWriteHandler;
@@ -14,6 +15,7 @@ import io.netty.channel.unix.FileDescriptor;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.IdleStateHandler;
+import io.netty.util.AttributeKey;
 
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -73,8 +75,15 @@ public class TransferServer {
                             @Override
                             protected void initChannel(EpollDomainSocketChannel ch) throws Exception {
 
-                                //TODO 超时关闭连接
-
+                                ch.pipeline().addLast(new IdleStateHandler(10, 10, 10));
+                                ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
+                                    @Override
+                                    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+                                        if (!closeEvent(evt, ctx.channel().closeFuture())){
+                                            super.userEventTriggered(ctx,evt);
+                                        }
+                                    }
+                                });
                                 ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
 
                                     @Override
@@ -120,6 +129,7 @@ public class TransferServer {
 
         Thread dataServer = new Thread(() -> {
             try {
+                AtomicInteger transferChannelCount = new AtomicInteger(0);
                 ServerBootstrap b = new ServerBootstrap();
                 b.group(bossGroup, workerGroup)
                         .channel(EpollServerDomainSocketChannel.class)
@@ -143,6 +153,15 @@ public class TransferServer {
                                 ch.pipeline().addLast(new IdleStateHandler(10, 10, 10));
                                 ch.pipeline().addLast(new TransferServerDataHandler());
                                 ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
+
+                                    @Override
+                                    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+                                        if (transferChannelCount.incrementAndGet() == transferChannels.size()){
+                                            transferChannels.clear();
+                                            Server.getInstance().changeStatus(ServerStatus.NORMAL);
+                                        }
+                                    }
+
                                     @Override
                                     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
                                         if (!closeEvent(evt, ctx.channel().closeFuture())){
