@@ -19,7 +19,6 @@ import io.netty.util.concurrent.GlobalEventExecutor;
 
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.*;
 
@@ -72,7 +71,7 @@ public class Server {
                 .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     public void initChannel(SocketChannel ch) throws Exception {
-                        ch.pipeline().addLast("decode", new ServerReadHandler("old server"));
+                        ch.pipeline().addLast("decode", new ServerReadHandler("server"));
                         ch.pipeline().addLast(new ChannelOutboundHandlerAdapter(){
                             @Override
                             public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
@@ -193,7 +192,7 @@ public class Server {
 
                                     serverChannelFuture.channel().close().addListener(future -> {
                                         if (future.isSuccess()) {
-                                            new Thread(() -> startHotFixTask()).start();
+                                            startHotFixTask();
                                         }else {
                                             future.cause().printStackTrace();
                                         }
@@ -239,7 +238,7 @@ public class Server {
                                     //迁移存量数据
                                     startTransferReadData(channel);
 
-                                    //关闭迁移FD的连接
+                                    //FD已经迁移完，关闭用来迁移FD的连接
                                     ctx.channel().close().addListener(future -> {
                                         if (!future.isSuccess()){
                                             future.cause().printStackTrace();
@@ -255,7 +254,6 @@ public class Server {
                 }
             });
         }
-
     }
 
     public void startTransferReadData(Channel channel) {
@@ -276,7 +274,6 @@ public class Server {
                                             //清理
                                             channelMap.remove(channel.id().asLongText());
                                             channelIdMap.remove(channel.id().asLongText());
-                                            channelGroup.remove(channel);
 
                                             if (channelMap.size() == 0){
                                                 //完成迁移，退出老进程
@@ -302,7 +299,6 @@ public class Server {
         return workerGroup.register(channel);
     }
 
-    //TODO 是否有并发问题？
     public boolean addChannel(Channel channel){
         return channelGroup.add(channel);
     }

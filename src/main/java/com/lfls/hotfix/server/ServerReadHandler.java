@@ -21,7 +21,8 @@ public class ServerReadHandler extends ByteToMessageDecoder {
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
-        System.out.println(name + " accept a client!");
+        //迁移过来的连接不用再执行active
+        System.out.println(name + " connection active!");
         Server.getInstance().addChannel(ctx.channel());
     }
 

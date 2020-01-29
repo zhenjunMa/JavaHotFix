@@ -57,7 +57,7 @@ public class TransferServer {
                         .handler(new ChannelInitializer<EpollServerDomainSocketChannel>() {
                             @Override
                             protected void initChannel(EpollServerDomainSocketChannel ch) throws Exception {
-                                ch.pipeline().addLast(new IdleStateHandler(5, 5, 5));
+                                ch.pipeline().addLast(new IdleStateHandler(10, 10, 10));
                                 ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
                                     @Override
                                     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
@@ -72,6 +72,9 @@ public class TransferServer {
 
                             @Override
                             protected void initChannel(EpollDomainSocketChannel ch) throws Exception {
+
+                                //TODO 超时关闭连接
+
                                 ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
 
                                     @Override
@@ -79,7 +82,7 @@ public class TransferServer {
                                         //给收到的FD构建新的Channel
                                         FileDescriptor fd = (FileDescriptor) msg;
                                         EpollSocketChannel socketChannel = new EpollSocketChannel(fd.intValue());
-                                        socketChannel.pipeline().addLast("decode", new ServerReadHandler("new server"));
+                                        socketChannel.pipeline().addLast("decode", new ServerReadHandler("transfer server"));
                                         socketChannel.pipeline().addLast(new ChannelOutboundHandlerAdapter(){
                                             @Override
                                             public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
@@ -87,8 +90,6 @@ public class TransferServer {
                                             }
                                         });
                                         socketChannel.pipeline().addLast(new ServerWriteHandler());
-
-                                        Server.getInstance().addChannel(socketChannel);
 
                                         //通知old server正在迁移的连接对应的new channel ID
                                         String newChannelId = socketChannel.id().asLongText();
@@ -125,7 +126,7 @@ public class TransferServer {
                         .handler(new ChannelInitializer<EpollServerDomainSocketChannel>() {
                             @Override
                             protected void initChannel(EpollServerDomainSocketChannel ch) throws Exception {
-                                ch.pipeline().addLast(new IdleStateHandler(5, 5, 5));
+                                ch.pipeline().addLast(new IdleStateHandler(10, 10, 10));
                                 ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
                                     @Override
                                     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
@@ -139,7 +140,7 @@ public class TransferServer {
                         .childHandler(new ChannelInitializer<Channel>() {
                             @Override
                             protected void initChannel(Channel ch) throws Exception {
-                                ch.pipeline().addLast(new IdleStateHandler(5, 5, 5));
+                                ch.pipeline().addLast(new IdleStateHandler(10, 10, 10));
                                 ch.pipeline().addLast(new TransferServerDataHandler());
                                 ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
                                     @Override
@@ -177,9 +178,9 @@ public class TransferServer {
     public boolean closeEvent(Object evt, ChannelFuture future){
         if (evt instanceof IdleStateEvent){
             IdleStateEvent event = (IdleStateEvent) evt;
-            if (event.state()== IdleState.READER_IDLE
-                    || event.state()== IdleState.WRITER_IDLE
-                    || event.state()== IdleState.ALL_IDLE){
+            if (event.state() == IdleState.READER_IDLE
+                    || event.state() == IdleState.WRITER_IDLE
+                    || event.state() == IdleState.ALL_IDLE){
                 //5s没有事件发生，认为连接迁移完毕，关闭server
                 future.channel().close().addListener(f -> {
                     if (f.isSuccess()){
