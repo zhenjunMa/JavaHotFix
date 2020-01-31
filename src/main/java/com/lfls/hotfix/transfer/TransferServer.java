@@ -104,7 +104,6 @@ public class TransferServer {
                                         ByteBuf newIdBuf = ctx.alloc().buffer(4 + newChannelIdBuf.readableBytes());
                                         newIdBuf.writeInt(newChannelIdBuf.readableBytes());
                                         newIdBuf.writeBytes(newChannelIdBuf);
-                                        //TODO 是否需要release?
                                         newChannelIdBuf.release();
 
                                         ctx.writeAndFlush(newIdBuf).addListener(future -> {

@@ -45,6 +45,8 @@ public class TransferClientDataHandler extends ChannelInboundHandlerAdapter {
                 buffer.writeInt(readRemain.readableBytes());
                 buffer.writeBytes(readRemain);
 
+                newChannelIdBuf.release();
+
                 ctx.writeAndFlush(buffer).addListener(future1 -> {
                     if (future1.isSuccess()){
                         channel.close().addListener(future2 -> {

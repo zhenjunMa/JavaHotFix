@@ -94,6 +94,8 @@ public class Server {
                                                 buffer.writeByte(1);
                                                 buffer.writeInt(newChannelIdBuf.readableBytes());
                                                 buffer.writeBytes(newChannelIdBuf);
+                                                newChannelIdBuf.release();
+
                                                 buffer.writeInt(buf.readableBytes());
                                                 buffer.writeBytes(buf);
                                                 buf.release();
