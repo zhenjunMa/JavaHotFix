@@ -57,9 +57,23 @@ public class Server {
     }
 
     public void start() throws Exception {
-        ServerBootstrap b = new ServerBootstrap();
-        b.group(bossGroup, workerGroup)
-                .channel(EpollServerSocketChannel.class)
+        //使用Listener迁移代替使用SO_REUSEPORT，因此要先判断是否进行平滑升级
+        if (needHotFix()){
+            status = ServerStatus.HOT_FIX;
+        }else {
+            //如果需要热更新，则更新完成以后再启动
+            startHotFixServer();
+
+            //启动监听
+            ServerBootstrap b = getServerBootstrapWithoutChannel();
+            b.channel(EpollServerSocketChannel.class);
+
+            serverChannelFuture = b.bind(8989).sync();
+        }
+    }
+
+    public ServerBootstrap getServerBootstrapWithoutChannel(){
+        return new ServerBootstrap().group(bossGroup, workerGroup)
                 .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     public void initChannel(SocketChannel ch) throws Exception {
@@ -123,21 +137,11 @@ public class Server {
                 })
                 .option(ChannelOption.SO_BACKLOG, 128)
                 .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
-                .option(EpollChannelOption.SO_REUSEADDR, true)
-                .option(EpollChannelOption.SO_REUSEPORT, true)
+//                .option(EpollChannelOption.SO_REUSEADDR, true)
+//                .option(EpollChannelOption.SO_REUSEPORT, true)
                 .childOption(ChannelOption.SO_KEEPALIVE, true)
                 .childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
                 .childOption(ChannelOption.TCP_NODELAY, true);
-
-
-        serverChannelFuture = b.bind(8989).sync();
-
-        if (needHotFix()){
-            status = ServerStatus.HOT_FIX;
-        }else {
-            //如果需要热更新，则更新完成以后再启动
-            startHotFixServer();
-        }
     }
 
     public boolean needHotFix() {
@@ -191,14 +195,7 @@ public class Server {
                                             future.cause().printStackTrace();
                                         }
                                     });
-
-                                    serverChannelFuture.channel().close().addListener(future -> {
-                                        if (future.isSuccess()) {
-                                            startHotFixTask();
-                                        }else {
-                                            future.cause().printStackTrace();
-                                        }
-                                    });
+                                    startListenerTransferTask();
                                 }
                             }
                         });
@@ -212,7 +209,50 @@ public class Server {
 
     private final ExecutorService transferExecutors = Executors.newFixedThreadPool(10);
 
-    public void startHotFixTask() {
+    public void startListenerTransferTask() {
+        transferExecutors.execute(() -> {
+            try {
+                Bootstrap bootstrap = new Bootstrap();
+                bootstrap.group(workerGroup)
+                        .channel(EpollDomainSocketChannel.class)
+                        .handler(new ChannelInboundHandlerAdapter(){
+                            @Override
+                            public void channelActive(ChannelHandlerContext ctx) throws Exception {
+                                ctx.writeAndFlush(((EpollServerSocketChannel)serverChannelFuture.channel()).fd()).addListener(future -> {
+                                    if (!future.isSuccess()){
+                                        future.cause().printStackTrace();
+                                    }
+                                });
+                            }
+
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                                ByteBuf buf = (ByteBuf) msg;
+                                if (buf.readInt() == 1){
+                                    //Listener迁移完成，关闭当前Listener
+                                    serverChannelFuture.channel().close().addListener(future -> {
+                                        if (future.isSuccess()) {
+                                            //开始存量连接的迁移
+                                            startFDTransferTask();
+                                        }else {
+                                            future.cause().printStackTrace();
+                                        }
+                                    });
+                                }else {
+                                    //TODO 非法响应？
+                                }
+                            }
+                        });
+
+                SocketAddress fdAddr = new DomainSocketAddress("/tmp/transfer-listener.sock");
+                bootstrap.connect(fdAddr).sync();
+            }catch (Exception e){
+                e.printStackTrace();
+            }
+        });
+    }
+
+    public void startFDTransferTask() {
         for (Channel channel : channelGroup) {
             transferExecutors.execute(() -> {
                 try {
@@ -295,6 +335,12 @@ public class Server {
                 e.printStackTrace();
             }
         });
+    }
+
+    public ChannelFuture registerListener(Channel listener){
+        assert serverChannelFuture == null;
+        serverChannelFuture = bossGroup.register(listener);
+        return serverChannelFuture;
     }
 
     public ChannelFuture registerChannel(Channel channel){

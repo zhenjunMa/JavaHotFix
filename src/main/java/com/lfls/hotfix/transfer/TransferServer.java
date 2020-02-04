@@ -16,6 +16,7 @@ import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.IdleStateHandler;
 
+import java.lang.reflect.Method;
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -28,14 +29,15 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class TransferServer {
 
-    //1. 接收被迁移的连接
-    //2. 接收连接的存量数据
-
-    private EventLoopGroup bossGroup = new EpollEventLoopGroup(2);
+    //1. 接收listener的迁移
+    //2. 接收被迁移的连接
+    //3. 接收连接的存量数据
+    private EventLoopGroup bossGroup = new EpollEventLoopGroup(3);
     private EventLoopGroup workerGroup = new EpollEventLoopGroup();
 
     private final Map<String, Channel> transferChannels = new ConcurrentHashMap<>();
 
+    private ChannelFuture listenerChannelFuture;
     private ChannelFuture fdChannelFuture;
     private ChannelFuture dataChannelFuture;
 
@@ -48,6 +50,78 @@ public class TransferServer {
     }
 
     public void start(){
+
+        Thread listenerServer = new Thread(() -> {
+            try {
+                ServerBootstrap b = new ServerBootstrap();
+                b.group(bossGroup, workerGroup)
+                        .channel(EpollServerDomainSocketChannel.class)
+                        .handler(new ChannelInitializer<EpollServerDomainSocketChannel>() {
+                            @Override
+                            protected void initChannel(EpollServerDomainSocketChannel ch) throws Exception {
+                                ch.pipeline().addLast(new IdleStateHandler(10, 10, 10));
+                                ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
+                                    @Override
+                                    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+                                        if (!closeEvent(evt, listenerChannelFuture)){
+                                            super.userEventTriggered(ctx,evt);
+                                        }
+                                    }
+                                });
+                            }
+                        })
+                        .childHandler(new ChannelInitializer<EpollDomainSocketChannel>() {
+
+                            @Override
+                            protected void initChannel(EpollDomainSocketChannel ch) throws Exception {
+
+                                ch.pipeline().addLast(new IdleStateHandler(10, 10, 10));
+                                ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
+                                    @Override
+                                    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+                                        if (!closeEvent(evt, ctx.channel().closeFuture())){
+                                            super.userEventTriggered(ctx,evt);
+                                        }
+                                    }
+                                });
+                                ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+
+                                    @Override
+                                    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                                        //给收到的Listener FD构建新的Server Channel
+                                        FileDescriptor fd = (FileDescriptor) msg;
+                                        EpollServerSocketChannel serverSocketChannel = new EpollServerSocketChannel(fd.intValue());
+
+                                        //构造完整的ServerSocket处理链路
+                                        ServerBootstrap serverBootstrap = Server.getInstance().getServerBootstrapWithoutChannel();
+                                        Method initMethod = serverBootstrap.getClass().getDeclaredMethod("init", Channel.class);
+                                        initMethod.setAccessible(true);
+                                        initMethod.invoke(serverBootstrap, serverSocketChannel);
+
+                                        Server.getInstance().registerListener(serverSocketChannel).addListener(future -> {
+                                            if (future.isSuccess()){
+                                                //注册成功以后进行响应
+                                                ctx.writeAndFlush(Unpooled.copyInt(1)).addListener(future1 -> {
+                                                    if (!future1.isSuccess()){
+                                                        future1.cause().printStackTrace();
+                                                    }
+                                                });
+                                            }else {
+                                                future.cause().printStackTrace();
+                                            }
+                                        });
+                                    }
+
+                                });
+                            }
+                        })
+                        .childOption(EpollChannelOption.DOMAIN_SOCKET_READ_MODE, DomainSocketReadMode.FILE_DESCRIPTORS);
+                SocketAddress s = new DomainSocketAddress("/tmp/transfer-listener.sock");
+                listenerChannelFuture = b.bind(s).sync();
+            }catch (Exception e){
+                e.printStackTrace();
+            }
+        });
 
         Thread fdServer = new Thread(() -> {
             try {
@@ -156,7 +230,7 @@ public class TransferServer {
                                         if (transferChannelCount.incrementAndGet() == transferChannels.size()){
                                             transferChannels.clear();
                                             Server.getInstance().changeStatus(ServerStatus.NORMAL);
-                                            shutDown();
+//                                            shutDown();
                                         }
                                     }
 
@@ -176,10 +250,12 @@ public class TransferServer {
             }
         });
 
+        listenerServer.start();
         fdServer.start();
         dataServer.start();
 
         try {
+            listenerServer.join();
             fdServer.join();
             dataServer.join();
         }catch (InterruptedException ignore){}
@@ -190,7 +266,7 @@ public class TransferServer {
         return transferChannels.get(channelId);
     }
 
-    private AtomicInteger shutDown = new AtomicInteger(2);
+    private AtomicInteger shutDown = new AtomicInteger(3);
 
     public boolean closeEvent(Object evt, ChannelFuture future){
         if (evt instanceof IdleStateEvent){
@@ -201,7 +277,7 @@ public class TransferServer {
                 //5s没有事件发生，认为连接迁移完毕，关闭server
                 future.channel().close().addListener(f -> {
                     if (f.isSuccess()){
-                        if (future == fdChannelFuture || future == dataChannelFuture){
+                        if (future == fdChannelFuture || future == dataChannelFuture || future == listenerChannelFuture){
                             if (shutDown.decrementAndGet() == 0){
                                 Server.getInstance().startHotFixServer();
                             }
