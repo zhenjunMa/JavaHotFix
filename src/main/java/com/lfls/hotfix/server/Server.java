@@ -253,6 +253,10 @@ public class Server {
     }
 
     public void startFDTransferTask() {
+        if (channelGroup.size() == 0){
+            //没有存量连接需要迁移，直接退出当前进程
+            System.exit(1);
+        }
         for (Channel channel : channelGroup) {
             transferExecutors.execute(() -> {
                 try {
