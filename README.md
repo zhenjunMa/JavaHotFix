@@ -19,6 +19,3 @@ Java热更新的几种方式：
 4. Old Server迁移已经跟调用端建立好的连接到New Server。
 5. Old Server迁移存量连接各自对应的存量数据（包括部分读进来的数据以及还没有写出去的数据）给New Server。
 6. New Server拿到迁移连接的存量数据以后开始接管后续的读写事件。
-
-
-
