@@ -195,6 +195,7 @@ public class Server {
                                             future.cause().printStackTrace();
                                         }
                                     });
+                                    status = ServerStatus.HOT_FIX;
                                     startListenerTransferTask();
                                 }
                             }
